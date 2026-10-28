@@ -1,0 +1,179 @@
+name: tp6-activacion-kafka
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile.backend
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 30s
+  healthcheck:
+    test:
+      [
+        CMD,
+        node,
+        -e,
+        "process.exit(require('fs').existsSync('/tmp/tp6-ready')?0:1)",
+      ]
+    interval: 10s
+    timeout: 5s
+    retries: 15
+    start_period: 20s
+  depends_on:
+    postgres: { condition: service_healthy }
+    kafka-init: { condition: service_completed_successfully }
+  networks: [tp6]
+x-env: &env
+  KAFKA_BROKERS: kafka:29092
+  NODE_ENV: production
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tp6_local_only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/init-postgres.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [tp6]
+  kafka:
+    image: apache/kafka:3.9.1
+    ports: ["127.0.0.1:9092:9092"]
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xmx512m -Xms256m
+    volumes: [kafka-data:/var/lib/kafka/data]
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list >/dev/null 2>&1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+    networks: [tp6]
+  kafka-init:
+    image: apache/kafka:3.9.1
+    entrypoint: [/bin/sh, /scripts/create-topics.sh]
+    volumes: [./docker/create-topics.sh:/scripts/create-topics.sh:ro]
+    depends_on:
+      kafka: { condition: service_healthy }
+    networks: [tp6]
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:v1.3.0
+    ports: ["127.0.0.1:${KAFKA_UI_PORT:-8080}:8080"]
+    environment:
+      KAFKA_CLUSTERS_0_NAME: TP6
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+    networks: [tp6]
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports: ["127.0.0.1:${MAILHOG_PORT:-8025}:8025"]
+    restart: unless-stopped
+    networks: [tp6]
+  activation-api:
+    <<: *app
+    environment:
+      <<: *env
+      SERVICE_NAME: activation-api
+      KAFKA_GROUP_ID: activation-api
+      DATABASE_URL: postgresql://activation:${POSTGRES_PASSWORD:-tp6_local_only}@postgres:5432/activation
+      CORS_ORIGIN: http://localhost:${UI_PORT:-5173}
+    ports: ["127.0.0.1:${API_PORT:-3000}:3000"]
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+  billing-service:
+    <<: *app
+    environment:
+      <<: *env
+      SERVICE_NAME: billing-service
+      KAFKA_GROUP_ID: billing-svc
+      DATABASE_URL: postgresql://billing:${POSTGRES_PASSWORD:-tp6_local_only}@postgres:5432/billing
+  provisioning-service:
+    <<: *app
+    environment:
+      <<: *env
+      SERVICE_NAME: provisioning-service
+      KAFKA_GROUP_ID: provisioning-svc
+      DATABASE_URL: postgresql://provisioning:${POSTGRES_PASSWORD:-tp6_local_only}@postgres:5432/provisioning
+  notification-service:
+    <<: *app
+    environment:
+      <<: *env
+      SERVICE_NAME: notification-service
+      KAFKA_GROUP_ID: notification-svc
+      DATABASE_URL: postgresql://notification:${POSTGRES_PASSWORD:-tp6_local_only}@postgres:5432/notification
+      SMTP_HOST: mailhog
+      SMTP_PORT: 1025
+      MAILHOG_API_URL: http://mailhog:8025
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+      mailhog: { condition: service_started }
+  crm-analytics-service:
+    <<: *app
+    environment:
+      <<: *env
+      SERVICE_NAME: crm-analytics-service
+      KAFKA_GROUP_ID: ${CRM_GROUP_ID:-crm-analytics}
+      DATABASE_URL: postgresql://crm:${POSTGRES_PASSWORD:-tp6_local_only}@postgres:5432/crm
+  loyalty-service:
+    <<: *app
+    profiles: [loyalty]
+    environment:
+      <<: *env
+      SERVICE_NAME: loyalty-service
+      KAFKA_GROUP_ID: ${LOYALTY_GROUP_ID:-loyalty-svc-v1}
+      DATABASE_URL: postgresql://loyalty:${POSTGRES_PASSWORD:-tp6_local_only}@postgres:5432/loyalty
+  demo-ui:
+    build:
+      context: apps/demo-ui
+      args:
+        VITE_API_URL: http://localhost:${API_PORT:-3000}
+    ports: ["127.0.0.1:${UI_PORT:-5173}:80"]
+    depends_on:
+      activation-api: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1/]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [tp6]
+networks:
+  tp6:
+volumes:
+  postgres-data:
+  kafka-data:
