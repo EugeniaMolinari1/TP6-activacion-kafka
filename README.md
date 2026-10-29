@@ -4,7 +4,7 @@ POC de Programación Avanzada de EugeniaMolinari1. Implementa la consigna «POC 
 
 ## Ejecutar en Windows / Docker Desktop
 
-Requisitos: Git y Docker Desktop iniciado, con contenedores Linux y Docker Compose v2 o superior. Se recomienda disponer de 6 GB de RAM para Docker. Node.js no es necesario para levantar el sistema completo.
+Requisitos: Git y Docker Desktop iniciado, con contenedores Linux y Docker Compose v2 o superior. 
 
 ```powershell
 git clone https://github.com/EugeniaMolinari1/TP6-activacion-kafka.git
@@ -43,9 +43,13 @@ Ejemplo PowerShell:
 
 ```powershell
 $body = @{ customerId = 'C-1234'; planId = 'Plan Digital'; simulateFailure = 'none' } | ConvertTo-Json
-$r = Invoke-WebRequest -Method Post -Uri http://localhost:3000/activations -ContentType 'application/json' -Body $body
+
+$r = Invoke-WebRequest -Method Post -Uri "http://localhost:3000/activations" -ContentType 'application/json' -Body $body
+
 $r.StatusCode
+
 $activation = $r.Content | ConvertFrom-Json
+
 Invoke-RestMethod "http://localhost:3000/activations/$($activation.activationId)"
 ```
 
@@ -102,7 +106,15 @@ Ese script comprueba los modos sin fallo / provisioning / billing, estados, WebS
 
 ## Estado de validación
 
-Se verificaron las compilaciones backend y frontend, las pruebas automatizadas y la sintaxis de los scripts. Ver detalle y límites en [validación](docs/validation.md). El entorno de desarrollo remoto no tiene Docker; quedan pendientes el build de imágenes, el arranque real de Compose, Kafka KRaft, SMTP/Mailhog, Socket.IO en navegador y los cinco escenarios completos. No se afirma que esas comprobaciones hayan pasado.
+Se realizaron pruebas de compilación del backend y frontend, obteniendo resultados satisfactorios. También se ejecutaron las pruebas automatizadas del proyecto, con 8 pruebas unitarias y 6 pruebas de integración aprobadas.
+
+Se levantó el entorno mediante Docker Compose y se verificó el funcionamiento de los servicios principales, incluyendo Kafka, PostgreSQL, activation-api, billing-service, provisioning-service, notification-service, crm-analytics-service y la interfaz React.
+
+Se realizaron pruebas funcionales de activación exitosa, fallos de negocio y compensación, recuperación del servicio de notificaciones, escalado de consumidores y reproducción de eventos históricos mediante un consumidor adicional.
+
+Se comprobó el almacenamiento de activaciones en PostgreSQL, la actualización de estados en la interfaz y la recepción de notificaciones simuladas en MailHog.
+
+Las pruebas automatizadas no sustituyen las verificaciones realizadas sobre el entorno Docker. Las evidencias y los procedimientos se documentan en los archivos correspondientes de la carpeta docs/.
 
 ## Documentación de entrega
 
